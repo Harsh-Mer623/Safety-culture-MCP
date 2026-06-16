@@ -1,6 +1,6 @@
 import httpx
 from fastmcp import FastMCP
-from safetyculture_mcp.client import BASE_URL, HEADERS, raise_for_status
+from safetyculture_mcp.client import BASE_URL, TIMEOUT, get_headers, raise_for_status, handle_request_error
 from safetyculture_mcp.models.schemas import InspectionSummary, InspectionDetail
 
 mcp = FastMCP(name="Inspections")
@@ -15,22 +15,28 @@ async def list_inspections(
     params: dict = {"limit": limit, "archived": archived}
     if completed is not None:
         params["completed"] = completed
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{BASE_URL}/audits/search",
-            headers=HEADERS,
-            params=params,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                f"{BASE_URL}/audits/search",
+                headers=get_headers(),
+                params=params,
+            )
+    except Exception as e:
+        handle_request_error(e, "list_inspections")
     raise_for_status(resp)
     return [InspectionSummary(**a) for a in resp.json().get("audits", [])]
 
 
 @mcp.tool(description="Get full details for a single SafetyCulture inspection by ID")
 async def get_inspection(inspection_id: str) -> InspectionDetail:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{BASE_URL}/inspections/v1/inspections/{inspection_id}",
-            headers=HEADERS,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                f"{BASE_URL}/inspections/v1/inspections/{inspection_id}",
+                headers=get_headers(),
+            )
+    except Exception as e:
+        handle_request_error(e, "get_inspection")
     raise_for_status(resp)
     return InspectionDetail(**resp.json()["inspection"])

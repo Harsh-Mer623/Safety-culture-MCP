@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
-from safetyculture_mcp.client import BASE_URL, HEADERS, raise_for_status
+from safetyculture_mcp.client import BASE_URL, get_headers, raise_for_status
 from fastmcp.exceptions import ToolError
 from safetyculture_mcp.models.schemas import (
     InspectionSummary, InspectionDetail,
@@ -42,11 +42,11 @@ def test_client_base_url():
 
 
 def test_client_headers_authorization():
-    assert HEADERS["Authorization"].startswith("Bearer ")
+    assert get_headers()["Authorization"].startswith("Bearer ")
 
 
 def test_client_headers_content_type():
-    assert HEADERS["Content-Type"] == "application/json"
+    assert get_headers()["Content-Type"] == "application/json"
 
 
 def test_raise_for_status_401():
