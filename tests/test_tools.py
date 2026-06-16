@@ -1,3 +1,4 @@
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
@@ -35,6 +36,12 @@ def mock_client(resp: MagicMock) -> MagicMock:
     return c
 
 
+def make_ctx(token: str = "test_token") -> MagicMock:
+    ctx = MagicMock()
+    ctx.request_context.request.headers.get = MagicMock(return_value=token)
+    return ctx
+
+
 # ── client ────────────────────────────────────────────────────────────────────
 
 def test_client_base_url():
@@ -47,6 +54,21 @@ def test_client_headers_authorization():
 
 def test_client_headers_content_type():
     assert get_headers()["Content-Type"] == "application/json"
+
+
+def test_client_headers_from_ctx():
+    ctx = make_ctx("ctx_token")
+    h = get_headers(ctx)
+    assert h["Authorization"] == "Bearer ctx_token"
+
+
+def test_client_headers_missing_token_raises():
+    with patch.dict(os.environ, {}, clear=True):
+        os.environ.pop("SAFETYCULTURE_API_TOKEN", None)
+        ctx = MagicMock()
+        ctx.request_context.request.headers.get = MagicMock(return_value=None)
+        with pytest.raises(ToolError, match="token not provided"):
+            get_headers(ctx)
 
 
 def test_raise_for_status_401():
@@ -117,8 +139,9 @@ def test_user_defaults():
 @pytest.mark.asyncio
 async def test_list_inspections_returns_summaries():
     resp = make_resp(200, {"audits": [{"audit_id": "a1", "template_id": "t1"}]})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.inspections.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_inspections()
+        result = await list_inspections(ctx)
     assert len(result) == 1
     assert result[0].audit_id == "a1"
 
@@ -126,24 +149,27 @@ async def test_list_inspections_returns_summaries():
 @pytest.mark.asyncio
 async def test_list_inspections_empty():
     resp = make_resp(200, {"audits": []})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.inspections.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_inspections()
+        result = await list_inspections(ctx)
     assert result == []
 
 
 @pytest.mark.asyncio
 async def test_list_inspections_401():
     resp = make_resp(401, {})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.inspections.httpx.AsyncClient", return_value=mock_client(resp)):
         with pytest.raises(ToolError, match="Invalid or expired"):
-            await list_inspections()
+            await list_inspections(ctx)
 
 
 @pytest.mark.asyncio
 async def test_get_inspection_returns_detail():
     resp = make_resp(200, {"inspection": {"id": "i1", "title": "Safety Check", "is_marked_as_complete": True}})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.inspections.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await get_inspection("i1")
+        result = await get_inspection(ctx, "i1")
     assert result.id == "i1"
     assert result.title == "Safety Check"
     assert result.is_marked_as_complete is True
@@ -152,9 +178,10 @@ async def test_get_inspection_returns_detail():
 @pytest.mark.asyncio
 async def test_get_inspection_404():
     resp = make_resp(404, {})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.inspections.httpx.AsyncClient", return_value=mock_client(resp)):
         with pytest.raises(ToolError, match="not found"):
-            await get_inspection("bad")
+            await get_inspection(ctx, "bad")
 
 
 # ── templates ─────────────────────────────────────────────────────────────────
@@ -162,8 +189,9 @@ async def test_get_inspection_404():
 @pytest.mark.asyncio
 async def test_list_templates_returns_list():
     resp = make_resp(200, {"templates": [{"template_id": "t1", "name": "Daily Check"}]})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.templates.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_templates()
+        result = await list_templates(ctx)
     assert len(result) == 1
     assert result[0].name == "Daily Check"
 
@@ -171,17 +199,19 @@ async def test_list_templates_returns_list():
 @pytest.mark.asyncio
 async def test_list_templates_empty():
     resp = make_resp(200, {"templates": []})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.templates.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_templates()
+        result = await list_templates(ctx)
     assert result == []
 
 
 @pytest.mark.asyncio
 async def test_list_templates_429():
     resp = make_resp(429, {})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.templates.httpx.AsyncClient", return_value=mock_client(resp)):
         with pytest.raises(ToolError, match="rate limit"):
-            await list_templates()
+            await list_templates(ctx)
 
 
 # ── actions ───────────────────────────────────────────────────────────────────
@@ -189,8 +219,9 @@ async def test_list_templates_429():
 @pytest.mark.asyncio
 async def test_list_actions_returns_actions():
     resp = make_resp(200, {"actions": [{"task": {"task_id": "t1", "title": "Fix hazard", "status": "open"}}]})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_actions()
+        result = await list_actions(ctx)
     assert len(result) == 1
     assert result[0].task.task_id == "t1"
 
@@ -198,32 +229,36 @@ async def test_list_actions_returns_actions():
 @pytest.mark.asyncio
 async def test_list_actions_empty():
     resp = make_resp(200, {"actions": []})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_actions()
+        result = await list_actions(ctx)
     assert result == []
 
 
 @pytest.mark.asyncio
 async def test_list_actions_500():
     resp = make_resp(500, {})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
         with pytest.raises(ToolError, match="server error"):
-            await list_actions()
+            await list_actions(ctx)
 
 
 @pytest.mark.asyncio
 async def test_get_action_returns_action():
     resp = make_resp(200, {"action": {"task": {"task_id": "t1", "title": "Fix hazard", "status": "open"}}})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await get_action("t1")
+        result = await get_action(ctx, "t1")
     assert result.task.task_id == "t1"
 
 
 @pytest.mark.asyncio
 async def test_create_action_returns_id():
     resp = make_resp(200, {"action_id": "new1"})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await create_action(title="Fix guard rail", description="North entrance")
+        result = await create_action(ctx, title="Fix guard rail", description="North entrance")
     assert result.action_id == "new1"
 
 
@@ -232,8 +267,9 @@ async def test_create_action_returns_id():
 @pytest.mark.asyncio
 async def test_list_users_returns_users():
     resp = make_resp(200, {"data": [{"id": "u1", "email": "alice@example.com", "firstname": "Alice", "active": True}]})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.users.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_users()
+        result = await list_users(ctx)
     assert len(result) == 1
     assert result[0].email == "alice@example.com"
 
@@ -241,16 +277,18 @@ async def test_list_users_returns_users():
 @pytest.mark.asyncio
 async def test_list_users_empty():
     resp = make_resp(200, {"data": []})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.users.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await list_users()
+        result = await list_users(ctx)
     assert result == []
 
 
 @pytest.mark.asyncio
 async def test_search_users_by_email():
     resp = make_resp(200, {"users": [{"id": "u2", "email": "bob@example.com", "active": True}]})
+    ctx = make_ctx()
     with patch("safetyculture_mcp.tools.users.httpx.AsyncClient", return_value=mock_client(resp)):
-        result = await search_users_by_email(["bob@example.com"])
+        result = await search_users_by_email(ctx, ["bob@example.com"])
     assert result[0].email == "bob@example.com"
 
 

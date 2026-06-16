@@ -2,6 +2,7 @@ import os
 import logging
 import httpx
 from dotenv import load_dotenv
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 load_dotenv()
@@ -11,16 +12,26 @@ BASE_URL = "https://api.safetyculture.io"
 TIMEOUT = httpx.Timeout(30.0)
 
 
-def get_headers() -> dict:
-    token = os.environ.get("SAFETYCULTURE_API_TOKEN")
+def get_headers(ctx: Context | None = None) -> dict:
+    token = None
+    if ctx is not None:
+        try:
+            token = ctx.request_context.request.headers.get("x-safetyculture-token")
+        except (AttributeError, KeyError):
+            pass
     if not token:
-        raise ToolError("SAFETYCULTURE_API_TOKEN is not set. Configure it in Horizon secrets or your .env file.")
+        token = os.environ.get("SAFETYCULTURE_API_TOKEN")
+    if not token:
+        raise ToolError(
+            "SafetyCulture API token not provided. "
+            "Pass it via the x-safetyculture-token header or set SAFETYCULTURE_API_TOKEN."
+        )
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 def raise_for_status(resp: httpx.Response) -> None:
     if resp.status_code == 401:
-        raise ToolError("Invalid or expired SAFETYCULTURE_API_TOKEN. Check your .env file.")
+        raise ToolError("Invalid or expired SafetyCulture API token.")
     if resp.status_code == 404:
         raise ToolError(f"Resource not found: {resp.url}")
     if resp.status_code == 429:

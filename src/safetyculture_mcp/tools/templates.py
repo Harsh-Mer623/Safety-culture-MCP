@@ -1,5 +1,5 @@
 import httpx
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from safetyculture_mcp.client import BASE_URL, TIMEOUT, get_headers, raise_for_status, handle_request_error
 from safetyculture_mcp.models.schemas import Template
 
@@ -8,6 +8,7 @@ mcp = FastMCP(name="Templates")
 
 @mcp.tool(description="List templates for the authenticated SafetyCulture account")
 async def list_templates(
+    ctx: Context,
     limit: int = 20,
     archived: bool = False,
 ) -> list[Template]:
@@ -15,7 +16,7 @@ async def list_templates(
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.get(
                 f"{BASE_URL}/templates/search",
-                headers=get_headers(),
+                headers=get_headers(ctx),
                 params={"limit": limit, "archived": archived},
             )
     except Exception as e:
