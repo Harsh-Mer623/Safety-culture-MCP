@@ -15,11 +15,24 @@ from safetyculture_mcp.models.schemas import (
     PersonRef, SiteRef,
     User,
 )
-from safetyculture_mcp.tools.inspections import list_inspections, get_inspection
-from safetyculture_mcp.tools.templates import list_templates
-from safetyculture_mcp.tools.actions import list_actions, get_action, create_action, list_all_actions, update_action
-from safetyculture_mcp.tools.users import list_users, search_users_by_email
+from safetyculture_mcp.tools.actions import (
+    list_actions, get_action, create_action, list_all_actions, update_action,
+    list_action_statuses, list_action_priorities, list_action_labels,
+    delete_action, add_action_comment,
+)
+from safetyculture_mcp.tools.templates import list_templates, get_template, get_template_definition
+from safetyculture_mcp.tools.users import list_users, search_users_by_email, get_user
 from safetyculture_mcp.tools.health import whoami
+from safetyculture_mcp.tools.sites import list_sites, search_sites, get_site
+from safetyculture_mcp.tools.groups import list_groups, list_users_in_group
+from safetyculture_mcp.tools.composite import list_users_with_actions, search_actions_by_assignee_email
+from safetyculture_mcp.tools.inspections import (
+    list_inspections, get_inspection, create_inspection, get_inspection_answers,
+    update_inspection, complete_inspection, archive_inspection, restore_inspection,
+    export_inspection_pdf,
+)
+from safetyculture_mcp.client import parse_concatenated_json
+from safetyculture_mcp.action_config import build_status_filter, build_assignee_filter
 
 # Shared helpers — defined in helpers.py, re-exported by conftest.py
 from helpers import make_resp, mock_request, make_ctx
@@ -83,6 +96,12 @@ def test_raise_for_status_401():
 def test_raise_for_status_404():
     resp = httpx.Response(404, request=httpx.Request("GET", "http://t"))
     with pytest.raises(ToolError, match="not found"):
+        raise_for_status(resp)
+
+
+def test_raise_for_status_400():
+    resp = httpx.Response(400, request=httpx.Request("GET", "http://t"), json={"message": "invalid filter"})
+    with pytest.raises(ToolError, match="Bad request"):
         raise_for_status(resp)
 
 
@@ -386,7 +405,7 @@ async def test_create_action_returns_id():
 async def test_create_action_with_assignee():
     resp = make_resp(200, {"action_id": "new2"})
     ctx = make_ctx()
-    with patch("safetyculture_mcp.tools.actions.request", mock_request(resp)):
+    with patch("safetyculture_mcp.tools.actions.request", mock_request(resp)) as mock_req:
         result = await create_action(
             ctx,
             title="Inspect roof",
@@ -395,6 +414,14 @@ async def test_create_action_with_assignee():
             priority_id="p1",
         )
     assert result.action_id == "new2"
+    sent_body = mock_req.call_args.kwargs["json"]
+    assert sent_body["collaborators"] == [
+        {
+            "collaborator_id": "user_abc",
+            "collaborator_type": "USER",
+            "assigned_role": "ASSIGNEE",
+        }
+    ]
 
 
 # ── users ─────────────────────────────────────────────────────────────────────
@@ -646,13 +673,208 @@ async def test_server_exposes_all_tools():
     from fastmcp import FastMCP
     assert isinstance(mcp, FastMCP)
     expected = [
-        "list_inspections", "get_inspection",
-        "list_templates",
-        "list_actions", "get_action", "create_action",
-        "list_all_actions", "update_action",
-        "list_users", "search_users_by_email",
+        # health
         "whoami",
+        # inspections
+        "list_inspections", "get_inspection", "create_inspection",
+        "get_inspection_answers", "update_inspection", "complete_inspection",
+        "archive_inspection", "restore_inspection", "export_inspection_pdf",
+        # templates
+        "list_templates", "get_template", "get_template_definition",
+        # actions
+        "list_action_statuses", "list_action_priorities", "list_action_labels",
+        "list_actions", "get_action", "create_action",
+        "list_all_actions", "update_action", "delete_action", "add_action_comment",
+        # users
+        "list_users", "search_users_by_email", "get_user",
+        # sites
+        "list_sites", "search_sites", "get_site",
+        # groups
+        "list_groups", "list_users_in_group",
+        # composite
+        "list_users_with_actions", "search_actions_by_assignee_email",
     ]
     for name in expected:
         tool = await mcp.get_tool(name)
         assert tool is not None, f"Tool '{name}' not found on server"
+
+
+# ── action_config / filters ───────────────────────────────────────────────────
+
+def test_build_status_filter_uses_correct_api_shape():
+    f = build_status_filter("TO_DO")
+    assert f == {"status_id": {"value": ["17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e"]}}
+
+
+def test_build_assignee_filter_uses_correct_api_shape():
+    f = build_assignee_filter("user_abc")
+    assert f["collaborator"]["value"][0]["collaborator_id"] == "user_abc"
+
+
+@pytest.mark.asyncio
+async def test_list_action_statuses_returns_defaults():
+    ctx = make_ctx()
+    result = await list_action_statuses(ctx)
+    assert len(result) == 4
+    assert result[0].key == "TO_DO"
+
+
+@pytest.mark.asyncio
+async def test_list_action_priorities_returns_defaults():
+    ctx = make_ctx()
+    result = await list_action_priorities(ctx)
+    assert len(result) == 4
+    assert any(p.label == "High" for p in result)
+
+
+@pytest.mark.asyncio
+async def test_list_action_labels():
+    body = {"labels": [{"label_id": "l1", "label_name": "Safety"}]}
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.actions.request", mock_request(make_resp(200, body))):
+        result = await list_action_labels(ctx)
+    assert result[0].label_name == "Safety"
+
+
+@pytest.mark.asyncio
+async def test_delete_action():
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.actions.request", mock_request(make_resp(200, {}))):
+        result = await delete_action(ctx, ["a1", "a2"])
+    assert result.deleted_ids == ["a1", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_add_action_comment():
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.actions.request", mock_request(make_resp(200, {}))):
+        result = await add_action_comment(ctx, "t1", "Please review")
+    assert result.comment == "Please review"
+
+
+# ── client streaming ────────────────────────────────────────────────────────────
+
+def test_parse_concatenated_json_newlines():
+    text = '{"a":1}\n{"b":2}'
+    assert len(parse_concatenated_json(text)) == 2
+
+
+def test_parse_concatenated_json_back_to_back():
+    text = '{"a":1}{"b":2}'
+    assert len(parse_concatenated_json(text)) == 2
+
+
+def test_parse_concatenated_json_invalid_raises():
+    with pytest.raises(ToolError, match="Failed to parse streaming"):
+        parse_concatenated_json('{"a":1}{bad')
+
+
+def test_created_action_accepts_task_id():
+    ca = CreatedAction(task_id="t1")
+    assert ca.action_id == "t1"
+
+
+# ── composite ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_users_with_actions_aggregates_assignees():
+    body = {
+        "actions": [
+            {
+                "task": {
+                    "task_id": "t1",
+                    "status": {"key": "TO_DO"},
+                    "collaborators": [
+                        {
+                            "collaborator_id": "u1",
+                            "collaborator_type": "USER",
+                            "assigned_role": "ASSIGNEE",
+                            "user": {"firstname": "Alice", "lastname": "Smith"},
+                        }
+                    ],
+                }
+            },
+            {
+                "task": {
+                    "task_id": "t2",
+                    "status": {"key": "TO_DO"},
+                    "collaborators": [
+                        {
+                            "collaborator_id": "u1",
+                            "collaborator_type": "USER",
+                            "assigned_role": "ASSIGNEE",
+                            "user": {"firstname": "Alice", "lastname": "Smith"},
+                        }
+                    ],
+                }
+            },
+        ],
+        "next_page_token": None,
+    }
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.actions.request", mock_request(make_resp(200, body))):
+        result = await list_users_with_actions(ctx, status_key="TO_DO")
+    assert len(result) == 1
+    assert result[0].firstname == "Alice"
+    assert result[0].action_count == 2
+
+
+# ── sites ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_sites():
+    body = {
+        "folders_with_ancestors": [
+            {
+                "folder": {"id": "s1", "name": "Warehouse", "meta_label": "location"},
+                "ancestors": [{"id": "a1", "name": "NSW", "meta_label": "region"}],
+            }
+        ],
+        "next_page_token": "",
+    }
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.sites.request", mock_request(make_resp(200, body))):
+        result = await list_sites(ctx)
+    assert result.sites[0].folder.name == "Warehouse"
+    assert len(result.sites[0].ancestors) == 1
+    assert result.total_count is None
+
+
+@pytest.mark.asyncio
+async def test_list_sites_falls_back_to_folders():
+    body = {
+        "folders": [
+            {
+                "folder": {"id": "s2", "name": "Depot", "meta_label": "location"},
+                "ancestors": [{"id": "a2", "name": "VIC", "meta_label": "region"}],
+            }
+        ],
+        "folders_with_ancestors": [],
+        "next_page_token": "",
+    }
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.sites.request", mock_request(make_resp(200, body))):
+        result = await list_sites(ctx)
+    assert result.sites[0].folder.name == "Depot"
+    assert len(result.sites[0].ancestors) == 1
+
+
+# ── inspections (extended) ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_inspection():
+    body = {"inspection_identity": {"inspection_id": "insp_1", "organisation_id": "org_1"}}
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.inspections.request", mock_request(make_resp(200, body))):
+        result = await create_inspection(ctx, "template_1")
+    assert result.inspection_id == "insp_1"
+
+
+@pytest.mark.asyncio
+async def test_get_template_definition():
+    body = {"definition": {"template_id": "t1", "name": "Daily Check", "items": [{"item_id": "q1"}]}}
+    ctx = make_ctx()
+    with patch("safetyculture_mcp.tools.templates.request", mock_request(make_resp(200, body))):
+        result = await get_template_definition(ctx, "t1")
+    assert result.name == "Daily Check"
+    assert len(result.items) == 1

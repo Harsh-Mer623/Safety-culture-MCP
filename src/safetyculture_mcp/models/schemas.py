@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _Base(BaseModel):
@@ -115,7 +115,16 @@ class ActionsPage(_Base):
 
 
 class CreatedAction(_Base):
-    action_id: str  # UNVERIFIED: confirm field name against live API response — may be "id" or "task_id"
+    action_id: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_action_id(cls, data: object) -> object:
+        if isinstance(data, dict) and not data.get("action_id"):
+            alt = data.get("task_id") or data.get("id")
+            if alt:
+                return {**data, "action_id": alt}
+        return data
 
 
 class UpdateActionResult(_Base):
@@ -144,9 +153,162 @@ class WhoAmIResponse(_Base):
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 class User(_Base):
-    id: str  # UNVERIFIED: confirm field name against live API response
+    id: str
     email: str
     firstname: str | None = None
     lastname: str | None = None
     active: bool = True
     role: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_user_id(cls, data: object) -> object:
+        if isinstance(data, dict) and not data.get("id") and data.get("user_id"):
+            return {**data, "id": data["user_id"]}
+        return data
+
+
+# ── Action configuration ──────────────────────────────────────────────────────
+
+class ActionStatusInfo(_Base):
+    status_id: str
+    key: str | None = None
+    label: str | None = None
+    is_complete: bool = False
+
+
+class ActionPriorityInfo(_Base):
+    priority_id: str
+    label: str | None = None
+
+
+class ActionLabel(_Base):
+    label_id: str
+    label_name: str | None = None
+
+
+class DeleteActionResult(_Base):
+    deleted_ids: list[str]
+
+
+class AddCommentResult(_Base):
+    task_id: str
+    comment: str
+
+
+# ── Sites (directory folders) ─────────────────────────────────────────────────
+
+class Site(_Base):
+    id: str
+    name: str | None = None
+    meta_label: str | None = None
+    org_id: str | None = None
+    created_at: str | None = None
+    modified_at: str | None = None
+    members_count: int | None = None
+    deleted: bool = False
+
+
+class SiteWithAncestors(_Base):
+    folder: Site
+    ancestors: list[Site] = []
+    members_count: int | None = None
+    has_children: bool | None = None
+
+
+class SitesPage(_Base):
+    sites: list[SiteWithAncestors] = []
+    next_page_token: str | None = None
+    total_count: int | None = None
+
+
+class SiteDetail(_Base):
+    folder: Site
+    ancestors: list[Site] = []
+    member_count: int | None = None
+
+
+# ── Groups ────────────────────────────────────────────────────────────────────
+
+class Group(_Base):
+    id: str
+    name: str | None = None
+
+
+class GroupUser(_Base):
+    user_id: str
+    email: str | None = None
+    firstname: str | None = None
+    lastname: str | None = None
+    status: str | None = None
+
+
+class GroupUsersPage(_Base):
+    users: list[GroupUser] = []
+    total: int | None = None
+    offset: int | None = None
+    limit: int | None = None
+
+
+# ── Composite query results ─────────────────────────────────────────────────────
+
+class UserActionSummary(_Base):
+    user_id: str | None = None
+    firstname: str | None = None
+    lastname: str | None = None
+    email: str | None = None
+    action_count: int = 0
+    action_ids: list[str] = Field(default_factory=list)
+
+
+# ── Inspections (extended) ────────────────────────────────────────────────────
+
+class InspectionIdentity(_Base):
+    inspection_id: str
+    organisation_id: str | None = None
+
+
+class CreatedInspection(_Base):
+    inspection_id: str
+    organisation_id: str | None = None
+
+
+class InspectionAnswer(_Base):
+    question_id: str | None = None
+    modified_at: str | None = None
+    # Type-specific answer payloads — extra fields ignored at parse time
+    text_answer: dict | None = None
+    question_answer: dict | None = None
+    checkbox_answer: dict | None = None
+    list_answer: dict | None = None
+    datetime_answer: dict | None = None
+    media_answer: dict | None = None
+    site_answer: dict | None = None
+    table_answer: dict | None = None
+
+
+class InspectionExportResult(_Base):
+    url: str | None = None
+    status: str | None = None
+
+
+class InspectionMutationResult(_Base):
+    inspection_id: str
+
+
+# ── Templates (extended) ────────────────────────────────────────────────────────
+
+class TemplateDetail(_Base):
+    template_id: str | None = None
+    name: str | None = None
+    description: str | None = None
+    created_at: str | None = None
+    modified_at: str | None = None
+    archived: bool = False
+
+
+class TemplateDefinition(_Base):
+    """Structural template definition — only known fields are modelled; extras ignored."""
+    template_id: str | None = None
+    name: str | None = None
+    items: list[dict] = []

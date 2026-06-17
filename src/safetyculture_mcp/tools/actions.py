@@ -1,35 +1,70 @@
+from typing import Literal
+
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
+from safetyculture_mcp.action_config import (
+    DEFAULT_ACTION_PRIORITIES,
+    DEFAULT_ACTION_STATUSES,
+    build_assignee_filter,
+    build_status_filter,
+)
 from safetyculture_mcp.client import get_headers, raise_for_status, request
-from safetyculture_mcp.models.schemas import Action, ActionsPage, CreatedAction, UpdateActionResult
+from safetyculture_mcp.models.schemas import (
+    Action,
+    ActionLabel,
+    ActionPriorityInfo,
+    ActionStatusInfo,
+    ActionsPage,
+    AddCommentResult,
+    CreatedAction,
+    DeleteActionResult,
+    UpdateActionResult,
+)
 
 mcp = FastMCP(name="Actions")
 
-
-# Fixed: the SafetyCulture STATUS task_filter requires status_id (a UUID), not the
-# human-readable status_key string — sending status_key caused a 400 Bad Request.
-# These UUIDs were confirmed against this org's live action responses (status objects
-# always include both status_id and key). They follow SafetyCulture's standard 4-status
-# default workflow, but orgs CAN define custom statuses with different IDs — if a
-# status_key isn't in this map, the filter is rejected with a clear error rather than
-# silently sending a malformed request to the API.
-_STATUS_KEY_TO_ID = {
-    "TO_DO": "17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e",
-    "IN_PROGRESS": "20ce0cb1-387a-47d4-8c34-bc6fd3be0e27",
-    "COMPLETE": "7223d809-553e-4714-a038-62dc98f3fbf3",
-    "CANT_DO": "06308884-41c2-4ee0-9da7-5676647d3d75",
-}
+SortField = Literal["PRIORITY", "DATE_DUE", "CREATED_AT", "MODIFIED_AT"]
+SortDirection = Literal["ASC", "DESC"]
+StatusKey = Literal["TO_DO", "IN_PROGRESS", "COMPLETE", "CANT_DO"]
 
 
-def _status_filter(status_key: str) -> dict:
-    status_id = _STATUS_KEY_TO_ID.get(status_key.upper())
-    if status_id is None:
-        raise ToolError(
-            f"Unknown status_key '{status_key}'. Valid values: {', '.join(_STATUS_KEY_TO_ID)}. "
-            "If your organisation uses custom statuses, call get_action on a known action "
-            "and read its status.status_id/status.key to find the right value."
-        )
-    return {"type": "STATUS", "status_id": status_id}
+def _parse_actions_page(data: dict) -> ActionsPage:
+    return ActionsPage(
+        actions=[Action(**a) for a in data.get("actions", [])],
+        next_page_token=data.get("next_page_token") or None,
+        total_count=data.get("total_count"),
+    )
+
+
+@mcp.tool(description=(
+    "List the standard action status values for SafetyCulture (status_id, key, label, is_complete). "
+    "Use status_key with list_actions/list_all_actions filters, and status_id with create_action/update_action. "
+    "Labels may be customised per organisation but IDs are typically the documented defaults."
+))
+async def list_action_statuses(ctx: Context) -> list[ActionStatusInfo]:
+    return [ActionStatusInfo(**s) for s in DEFAULT_ACTION_STATUSES]
+
+
+@mcp.tool(description=(
+    "List the standard action priority values (priority_id and label). "
+    "Use priority_id with create_action and update_action."
+))
+async def list_action_priorities(ctx: Context) -> list[ActionPriorityInfo]:
+    return [ActionPriorityInfo(**p) for p in DEFAULT_ACTION_PRIORITIES]
+
+
+@mcp.tool(description=(
+    "List all action labels configured in the organisation. "
+    "Returns label_id and label_name for each label."
+))
+async def list_action_labels(ctx: Context) -> list[ActionLabel]:
+    resp = await request(
+        "GET", "/tasks/v1/customer_configuration/action_labels",
+        headers=get_headers(ctx),
+        tool="list_action_labels",
+    )
+    raise_for_status(resp)
+    return [ActionLabel(**lbl) for lbl in resp.json().get("labels", [])]
 
 
 @mcp.tool(description=(
@@ -47,9 +82,9 @@ async def list_actions(
     page_size: int = 20,
     page_token: str | None = None,
     assignee_id: str | None = None,
-    status_key: str | None = None,
-    sort_field: str = "CREATED_AT",
-    sort_direction: str = "DESC",
+    status_key: StatusKey | None = None,
+    sort_field: SortField = "CREATED_AT",
+    sort_direction: SortDirection = "DESC",
 ) -> ActionsPage:
     body: dict = {
         "page_size": page_size,
@@ -61,9 +96,9 @@ async def list_actions(
 
     task_filters = []
     if assignee_id:
-        task_filters.append({"type": "COLLABORATOR", "collaborator_id": assignee_id})
+        task_filters.append(build_assignee_filter(assignee_id))
     if status_key:
-        task_filters.append(_status_filter(status_key))  # Fixed: send status_id, not status_key
+        task_filters.append(build_status_filter(status_key))
     if task_filters:
         body["task_filters"] = task_filters
 
@@ -74,12 +109,7 @@ async def list_actions(
         tool="list_actions",
     )
     raise_for_status(resp)
-    data = resp.json()
-    return ActionsPage(
-        actions=[Action(**a) for a in data.get("actions", [])],
-        next_page_token=data.get("next_page_token"),
-        total_count=data.get("total_count"),
-    )
+    return _parse_actions_page(resp.json())
 
 
 @mcp.tool(description=(
@@ -106,9 +136,7 @@ async def get_action(ctx: Context, action_id: str) -> Action:
     "Optionally assign to a user by providing assignee_id (a user ID from search_users_by_email "
     "or get_user — not an email address). "
     "due_at must be ISO 8601 format e.g. 2026-12-31T09:00:00Z. "
-    "priority_id and status_id are org-specific UUIDs — to find valid values, call list_actions "
-    "or get_action on an existing action and read its priority/status objects; new actions "
-    "default to your organisation's default status if status_id is omitted."
+    "Call list_action_priorities and list_action_statuses for valid priority_id and status_id values."
 ))
 async def create_action(
     ctx: Context,
@@ -133,7 +161,13 @@ async def create_action(
     if inspection_id:
         body["inspection_id"] = inspection_id
     if assignee_id:
-        body["collaborators"] = [{"collaborator_id": assignee_id, "role_id": "ASSIGNEE"}]
+        body["collaborators"] = [
+            {
+                "collaborator_id": assignee_id,
+                "collaborator_type": "USER",
+                "assigned_role": "ASSIGNEE",
+            }
+        ]
 
     resp = await request(
         "POST", "/tasks/v1/actions",
@@ -142,7 +176,11 @@ async def create_action(
         tool="create_action",
     )
     raise_for_status(resp)
-    return CreatedAction(**resp.json())
+    data = resp.json()
+    action_id = data.get("action_id") or data.get("task_id") or data.get("id")
+    if not action_id:
+        raise ToolError("Create action succeeded but response contained no action_id.")
+    return CreatedAction(action_id=action_id)
 
 
 @mcp.tool(description=(
@@ -159,14 +197,11 @@ async def create_action(
 async def list_all_actions(
     ctx: Context,
     assignee_id: str | None = None,
-    status_key: str | None = None,
-    sort_field: str = "CREATED_AT",
-    sort_direction: str = "DESC",
+    status_key: StatusKey | None = None,
+    sort_field: SortField = "CREATED_AT",
+    sort_direction: SortDirection = "DESC",
     max_pages: int = 50,
 ) -> ActionsPage:
-    # Fixed: hard server-side cap prevents callers from accumulating unbounded memory.
-    # At 100 pages × 100 actions each = max 10,000 Action objects. Without this cap,
-    # a caller passing max_pages=500 could exhaust MCP process memory on large orgs.
     max_pages = min(max_pages, 100)
     hdrs = get_headers(ctx)
     all_actions: list[Action] = []
@@ -184,9 +219,9 @@ async def list_all_actions(
 
         task_filters = []
         if assignee_id:
-            task_filters.append({"type": "COLLABORATOR", "collaborator_id": assignee_id})
+            task_filters.append(build_assignee_filter(assignee_id))
         if status_key:
-            task_filters.append(_status_filter(status_key))  # Fixed: send status_id, not status_key
+            task_filters.append(build_status_filter(status_key))
         if task_filters:
             body["task_filters"] = task_filters
 
@@ -210,14 +245,9 @@ async def list_all_actions(
 @mcp.tool(description=(
     "Update one or more fields on an existing SafetyCulture action (identified by action_id, "
     "i.e. its task_id from list_actions/get_action). At least one optional field must be provided. "
-    "Only the fields you provide are updated — omitted fields are left unchanged; each provided "
-    "field is sent as its own API request, so a partial failure may leave some fields updated "
-    "and others not (updated_fields in the result shows what succeeded before any error). "
-    "status_id: this org's standard status UUIDs are TO_DO=17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e, "
-    "IN_PROGRESS=20ce0cb1-387a-47d4-8c34-bc6fd3be0e27, COMPLETE=7223d809-553e-4714-a038-62dc98f3fbf3, "
-    "CANT_DO=06308884-41c2-4ee0-9da7-5676647d3d75 — confirm against get_action if your org uses "
-    "custom statuses, since these IDs are not guaranteed across organisations. "
-    "assignee_ids: full replacement — send all desired assignee user IDs at once, not just the ones changing. "
+    "Only the fields you provide are updated — omitted fields are left unchanged. "
+    "Call list_action_statuses and list_action_priorities for valid status_id and priority_id values. "
+    "assignee_ids: full replacement — send all desired assignee user IDs at once. "
     "due_at: ISO 8601 e.g. 2026-12-31T09:00:00Z. Pass empty string to clear the due date."
 ))
 async def update_action(
@@ -247,7 +277,6 @@ async def update_action(
     if description is not None:
         await _put("description", {"description": description}, "description")
     if due_at is not None:
-        # empty string clears the due date; a datetime string sets it
         body = {"due_at": due_at} if due_at else {}
         await _put("due_at", body, "due_at")
     if status_id is not None:
@@ -262,3 +291,39 @@ async def update_action(
         await _put("assignees", {"assignees": assignees}, "assignees")
 
     return UpdateActionResult(action_id=action_id, updated_fields=updated)
+
+
+@mcp.tool(description=(
+    "Delete one or more SafetyCulture actions by task_id (bulk delete). "
+    "Pass a single ID or multiple IDs in action_ids."
+))
+async def delete_action(ctx: Context, action_ids: list[str]) -> DeleteActionResult:
+    if not action_ids:
+        raise ToolError("action_ids must contain at least one action ID.")
+    resp = await request(
+        "POST", "/tasks/v1/actions/delete",
+        headers=get_headers(ctx),
+        json={"ids": action_ids},
+        tool="delete_action",
+    )
+    raise_for_status(resp)
+    return DeleteActionResult(deleted_ids=action_ids)
+
+
+@mcp.tool(description=(
+    "Add a comment to an action's timeline. "
+    "task_id is the action's task_id from list_actions/get_action."
+))
+async def add_action_comment(
+    ctx: Context,
+    action_id: str,
+    comment: str,
+) -> AddCommentResult:
+    resp = await request(
+        "POST", "/tasks/v1/timeline/comments",
+        headers=get_headers(ctx),
+        json={"task_id": action_id, "comment": comment},
+        tool="add_action_comment",
+    )
+    raise_for_status(resp)
+    return AddCommentResult(task_id=action_id, comment=comment)

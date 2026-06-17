@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -111,6 +112,13 @@ def raise_for_status(resp: httpx.Response) -> None:
         raise ToolError("Invalid or expired SafetyCulture API token.")
     if resp.status_code == 404:
         raise ToolError("Resource not found.")  # Fixed: removed URL from message to avoid leaking API path structure
+    if resp.status_code == 400:
+        try:
+            detail = resp.json()
+            msg = detail.get("message") or detail.get("error") or str(detail)
+        except Exception:
+            msg = (resp.text or "Bad request")[:200]
+        raise ToolError(f"Bad request: {msg}")
     if resp.status_code == 429:
         raise ToolError("SafetyCulture rate limit exceeded. Retry after the reset window.")
     if resp.status_code >= 500:
@@ -215,3 +223,42 @@ async def request(
 
     assert resp is not None, "request() returned without a response — unexpected code path"  # Fixed: converts silent type error to explicit runtime failure
     return resp
+
+
+def parse_concatenated_json(text: str) -> list[dict]:
+    """Parse streaming API bodies: newline-delimited or back-to-back JSON objects."""
+    text = text.strip()
+    if not text:
+        return []
+    decoder = json.JSONDecoder()
+    idx = 0
+    results: list[dict] = []
+    while idx < len(text):
+        while idx < len(text) and text[idx] in " \n\r\t":
+            idx += 1
+        if idx >= len(text):
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError as exc:
+            raise ToolError(
+                f"Failed to parse streaming SafetyCulture response near offset {idx}: {exc.msg}"
+            ) from exc
+        if isinstance(obj, dict):
+            results.append(obj)
+        idx += end
+    return results
+
+
+async def stream_json_objects(
+    method: str,
+    path: str,
+    *,
+    headers: dict,
+    tool: str,
+    params: dict | None = None,
+) -> list[dict]:
+    """Fetch a streaming SafetyCulture endpoint and parse concatenated JSON objects."""
+    resp = await request(method, path, headers=headers, params=params, tool=tool)
+    raise_for_status(resp)
+    return parse_concatenated_json(resp.text)

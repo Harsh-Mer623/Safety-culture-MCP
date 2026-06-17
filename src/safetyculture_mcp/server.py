@@ -28,6 +28,10 @@ from safetyculture_mcp.tools.actions import mcp as actions_mcp
 from safetyculture_mcp.tools.templates import mcp as templates_mcp
 from safetyculture_mcp.tools.users import mcp as users_mcp
 from safetyculture_mcp.tools.health import mcp as health_mcp
+from safetyculture_mcp.tools.sites import mcp as sites_mcp
+from safetyculture_mcp.tools.groups import mcp as groups_mcp
+from safetyculture_mcp.tools.composite import mcp as composite_mcp
+from safetyculture_mcp.resources.org_config import mcp as org_config_mcp
 
 
 # Fixed: replaced atexit-based shutdown with FastMCP lifespan so aclose() runs
@@ -45,6 +49,10 @@ mcp.mount(actions_mcp)
 mcp.mount(templates_mcp)
 mcp.mount(users_mcp)
 mcp.mount(health_mcp)
+mcp.mount(sites_mcp)
+mcp.mount(groups_mcp)
+mcp.mount(composite_mcp)
+mcp.mount(org_config_mcp)
 
 if __name__ == "__main__":
     mcp.run()

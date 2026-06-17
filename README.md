@@ -60,7 +60,56 @@ fastmcp inspect src/safetyculture_mcp/server.py:mcp
 | `update_action` | Update fields on an existing action (title, description, status, due_at, assignees) |
 | `list_users` | List all users in the organisation |
 | `search_users_by_email` | Search users by email addresses |
+| `get_user` | Get user details by ID |
 | `whoami` | Return the authenticated user's profile |
+
+### Action configuration
+| Tool | Description |
+|---|---|
+| `list_action_statuses` | List standard action status IDs and keys |
+| `list_action_priorities` | List standard action priority IDs |
+| `list_action_labels` | List org action labels |
+| `delete_action` | Bulk-delete actions by ID |
+| `add_action_comment` | Add a timeline comment to an action |
+
+### Sites & groups
+| Tool | Description |
+|---|---|
+| `list_sites` | List location-level sites (paginated) |
+| `search_sites` | Search sites by name |
+| `get_site` | Get site details with ancestors |
+| `list_groups` | List all groups |
+| `list_users_in_group` | List users in a group |
+
+### Inspections (extended)
+| Tool | Description |
+|---|---|
+| `create_inspection` | Create inspection from template |
+| `get_inspection_answers` | Get all Q&A responses |
+| `update_inspection` | Update inspection item values |
+| `complete_inspection` | Mark inspection complete |
+| `archive_inspection` | Archive an inspection |
+| `restore_inspection` | Restore archived inspection |
+| `export_inspection_pdf` | Export inspection to PDF/Word |
+
+### Templates (extended)
+| Tool | Description |
+|---|---|
+| `get_template` | Get single template metadata |
+| `get_template_definition` | Get template structure for prefilling |
+
+### Composite queries
+| Tool | Description |
+|---|---|
+| `list_users_with_actions` | Users with actions in a given status |
+| `search_actions_by_assignee_email` | Actions for a user by email |
+
+### MCP resources
+| URI | Description |
+|---|---|
+| `safetyculture://org/statuses` | Action status reference |
+| `safetyculture://org/priorities` | Action priority reference |
+| `safetyculture://org/sites` | Org sites (first page) |
 
 ## Claude Desktop config
 
