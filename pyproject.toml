@@ -11,9 +11,11 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp==3.4.2",
-    "httpx>=0.27.0",
-    "pydantic>=2.0.0",
-    "python-dotenv",
+    "httpx>=0.27.0,<1.0",          # Fixed: upper bound; 1.0 has pre-releases with breaking changes
+    "pydantic>=2.0.0,<3.0",        # Fixed: upper bound; pydantic v3 will introduce breaking changes
+    "python-dotenv>=1.0,<2.0",     # Fixed: upper bound; v2 changed key defaults
+    "tenacity>=9.0.0",             # Fixed: was missing — caused ImportError in wheel deployments
+    "python-json-logger>=4.0.0",   # Fixed: was missing — caused ImportError in wheel deployments
 ]
 
 [tool.pytest.ini_options]

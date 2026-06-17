@@ -23,7 +23,7 @@ class SiteRef(_Base):
 # ── Inspections ───────────────────────────────────────────────────────────────
 
 class InspectionSummary(_Base):
-    audit_id: str
+    audit_id: str  # UNVERIFIED: confirm field name against live API response — may be "id"
     template_id: str | None = None
     modified_at: str | None = None
 
@@ -35,7 +35,7 @@ class InspectionScore(_Base):
 
 
 class InspectionDetail(_Base):
-    id: str
+    id: str  # UNVERIFIED: confirm field name against live API response — may be "audit_id"
     template_id: str | None = None
     title: str | None = None
     created_at: str | None = None
@@ -91,7 +91,7 @@ class Collaborator(_Base):
 
 
 class ActionTask(_Base):
-    task_id: str
+    task_id: str  # UNVERIFIED: confirm field name against live API response
     title: str | None = None
     description: str | None = None
     due_at: str | None = None
@@ -115,7 +115,7 @@ class ActionsPage(_Base):
 
 
 class CreatedAction(_Base):
-    action_id: str
+    action_id: str  # UNVERIFIED: confirm field name against live API response — may be "id" or "task_id"
 
 
 class UpdateActionResult(_Base):
@@ -140,7 +140,7 @@ class WhoAmIResponse(_Base):
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 class User(_Base):
-    id: str
+    id: str  # UNVERIFIED: confirm field name against live API response
     email: str
     firstname: str | None = None
     lastname: str | None = None

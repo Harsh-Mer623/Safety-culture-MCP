@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from safetyculture_mcp.logging_config import configure_logging
 
@@ -21,13 +22,23 @@ if not os.environ.get("SAFETYCULTURE_API_TOKEN"):
     )
 
 from fastmcp import FastMCP
+from safetyculture_mcp.client import aclose_http_client
 from safetyculture_mcp.tools.inspections import mcp as inspections_mcp
 from safetyculture_mcp.tools.actions import mcp as actions_mcp
 from safetyculture_mcp.tools.templates import mcp as templates_mcp
 from safetyculture_mcp.tools.users import mcp as users_mcp
 from safetyculture_mcp.tools.health import mcp as health_mcp
 
-mcp = FastMCP(name="SafetyCulture MCP")
+
+# Fixed: replaced atexit-based shutdown with FastMCP lifespan so aclose() runs
+# in a live async context — atexit fired outside the event loop on Python 3.12+.
+@asynccontextmanager
+async def _sc_lifespan(server):
+    yield
+    await aclose_http_client()
+
+
+mcp = FastMCP(name="SafetyCulture MCP", lifespan=_sc_lifespan)
 
 mcp.mount(inspections_mcp)
 mcp.mount(actions_mcp)

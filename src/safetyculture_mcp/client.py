@@ -1,5 +1,4 @@
 import asyncio
-import atexit
 import logging
 import os
 import time
@@ -12,7 +11,7 @@ from fastmcp.exceptions import ToolError
 from tenacity import (
     AsyncRetrying,
     before_sleep_log,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential_jitter,
 )
@@ -31,6 +30,21 @@ _LIMITS = httpx.Limits(
 )
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
+
+
+# Fixed: retry predicate covering NetworkError, TimeoutException, AND HTTPStatusError
+# for retryable status codes. Previously HTTPStatusError was not in the predicate so
+# tenacity never retried 429/5xx — it re-raised immediately on the first attempt.
+# Retry flow: _do() raises HTTPStatusError → predicate returns True → tenacity waits
+# (exponential + jitter) → retries up to _MAX_ATTEMPTS; on exhaustion reraises →
+# caught by except block below → resp (last response) returned to caller.
+def _is_retryable_exc(exc: BaseException) -> bool:
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS
+    return False
+
 
 # ── Shared connection pool ────────────────────────────────────────────────────
 
@@ -52,20 +66,13 @@ def get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-def _shutdown_client() -> None:
+# Fixed: replaced atexit._shutdown_client() with this async function called from
+# FastMCP lifespan in server.py — atexit used asyncio.get_event_loop() which raises
+# DeprecationWarning in 3.10+ and RuntimeError in 3.12+; create_task() was not awaited.
+async def aclose_http_client() -> None:
     global _http_client
     if _http_client and not _http_client.is_closed:
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(_http_client.aclose())
-            else:
-                loop.run_until_complete(_http_client.aclose())
-        except Exception:
-            pass
-
-
-atexit.register(_shutdown_client)
+        await _http_client.aclose()
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -103,7 +110,7 @@ def raise_for_status(resp: httpx.Response) -> None:
     if resp.status_code == 401:
         raise ToolError("Invalid or expired SafetyCulture API token.")
     if resp.status_code == 404:
-        raise ToolError(f"Resource not found: {resp.url}")
+        raise ToolError("Resource not found.")  # Fixed: removed URL from message to avoid leaking API path structure
     if resp.status_code == 429:
         raise ToolError("SafetyCulture rate limit exceeded. Retry after the reset window.")
     if resp.status_code >= 500:
@@ -164,7 +171,7 @@ async def request(
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(_MAX_ATTEMPTS),
             wait=wait_exponential_jitter(initial=1, max=30, jitter=2),
-            retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+            retry=retry_if_exception(_is_retryable_exc),  # Fixed: now retries 429/5xx
             before_sleep=before_sleep_log(logger, logging.WARNING),
             reraise=True,
         ):
@@ -204,6 +211,7 @@ async def request(
             "api_network_error",
             extra={"tool": tool, "path": path, "error": str(e), "request_id": request_id},
         )
-        raise ToolError(f"Network error calling SafetyCulture ({tool}): {e}")
+        raise ToolError(f"Network error calling SafetyCulture ({tool}). Check connectivity.")  # Fixed: full error logged above; generic message to caller
 
-    return resp  # type: ignore[return-value]
+    assert resp is not None, "request() returned without a response — unexpected code path"  # Fixed: converts silent type error to explicit runtime failure
+    return resp

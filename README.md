@@ -22,10 +22,12 @@ cp .env.example .env
 ```powershell
 python -c "
 import asyncio, httpx
-from safetyculture_mcp.client import BASE_URL, HEADERS
 async def check():
     async with httpx.AsyncClient() as c:
-        r = await c.get(f'{BASE_URL}/audits/search', headers=HEADERS, params={'limit': 1})
+        r = await c.get(
+            'https://api.safetyculture.io/accounts/user/v1/user:WhoAmI',
+            headers={'Authorization': 'Bearer YOUR_TOKEN'}
+        )
         print(r.status_code, r.json())
 asyncio.run(check())
 "
@@ -54,8 +56,11 @@ fastmcp inspect src/safetyculture_mcp/server.py:mcp
 | `list_actions` | List actions (page_size) |
 | `get_action` | Get action detail by ID |
 | `create_action` | Create a new action (title, description, due_at) |
+| `list_all_actions` | Auto-paginate all actions (up to max_pages × 100, server cap 100 pages) |
+| `update_action` | Update fields on an existing action (title, description, status, due_at, assignees) |
 | `list_users` | List all users in the organisation |
 | `search_users_by_email` | Search users by email addresses |
+| `whoami` | Return the authenticated user's profile |
 
 ## Claude Desktop config
 

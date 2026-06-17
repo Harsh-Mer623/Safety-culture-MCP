@@ -52,12 +52,18 @@ class _SensitiveFilter(logging.Filter):
         return True
 
 
+# Fixed: track only the handler we installed so configure_logging() never removes
+# handlers installed by FastMCP, uvicorn, or other libraries before this call.
+_installed_handler: logging.Handler | None = None
+
+
 def configure_logging(level: str | None = None) -> None:
     """
     Configure root logger with JSON output.
     Level is read from LOG_LEVEL env var, then the ``level`` arg, defaulting to INFO.
-    Safe to call multiple times — clears existing handlers first (idempotent).
+    Safe to call multiple times — replaces only the handler installed by a prior call.
     """
+    global _installed_handler
     resolved = os.environ.get("LOG_LEVEL", level or "INFO").upper()
 
     handler = logging.StreamHandler()
@@ -75,5 +81,7 @@ def configure_logging(level: str | None = None) -> None:
 
     root = logging.getLogger()
     root.setLevel(resolved)
-    root.handlers = []
+    if _installed_handler is not None and _installed_handler in root.handlers:
+        root.removeHandler(_installed_handler)
+    _installed_handler = handler
     root.addHandler(handler)

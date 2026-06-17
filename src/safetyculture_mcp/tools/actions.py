@@ -123,6 +123,10 @@ async def list_all_actions(
     sort_direction: str = "DESC",
     max_pages: int = 50,
 ) -> ActionsPage:
+    # Fixed: hard server-side cap prevents callers from accumulating unbounded memory.
+    # At 100 pages × 100 actions each = max 10,000 Action objects. Without this cap,
+    # a caller passing max_pages=500 could exhaust MCP process memory on large orgs.
+    max_pages = min(max_pages, 100)
     hdrs = get_headers(ctx)
     all_actions: list[Action] = []
     page_token: str | None = None
@@ -165,10 +169,8 @@ async def list_all_actions(
 @mcp.tool(description=(
     "Update one or more fields on an existing SafetyCulture action. "
     "Only the fields you provide will be updated — omitted fields are left unchanged. "
-    "status_id: use a known UUID (To Do: 17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e, "
-    "In Progress: 20ce0cb1-387a-47d4-8c34-bc6fd3be0e27, "
-    "Complete: 7223d809-553e-4714-a038-62dc98f3fbf3, "
-    "Can't Do: 06308884-41c2-4ee0-9da7-5676647d3d75). "
+    "status_id: obtain valid status UUIDs from your organisation's action statuses endpoint "
+    "(GET /tasks/v1/actions/statuses) — do not hardcode UUIDs as they may be org-specific. "
     "assignee_ids: full replacement — send all desired assignee user IDs at once. "
     "due_at: ISO 8601 e.g. 2026-12-31T09:00:00Z. Pass empty string to clear the due date."
 ))
