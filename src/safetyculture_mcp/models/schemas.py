@@ -126,7 +126,11 @@ class UpdateActionResult(_Base):
 # ── Health ────────────────────────────────────────────────────────────────────
 
 class WhoAmIResponse(_Base):
-    # Field names are unconfirmed — all optional so extra="ignore" handles surprises
+    # Confirmed against live API response for a service-account token (2026-06-17).
+    # For service accounts: organisation_id holds a "role_..." value, and email holds
+    # a UUID placeholder instead of a real address — this is real API behavior, not a bug.
+    # `id`, `active`, `role` are not present in the service-account response; kept
+    # optional in case human-user tokens return a different shape.
     user_id: str | None = None
     id: str | None = None
     firstname: str | None = None

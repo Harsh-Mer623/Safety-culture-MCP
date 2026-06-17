@@ -6,12 +6,41 @@ from safetyculture_mcp.models.schemas import Action, ActionsPage, CreatedAction,
 mcp = FastMCP(name="Actions")
 
 
+# Fixed: the SafetyCulture STATUS task_filter requires status_id (a UUID), not the
+# human-readable status_key string — sending status_key caused a 400 Bad Request.
+# These UUIDs were confirmed against this org's live action responses (status objects
+# always include both status_id and key). They follow SafetyCulture's standard 4-status
+# default workflow, but orgs CAN define custom statuses with different IDs — if a
+# status_key isn't in this map, the filter is rejected with a clear error rather than
+# silently sending a malformed request to the API.
+_STATUS_KEY_TO_ID = {
+    "TO_DO": "17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e",
+    "IN_PROGRESS": "20ce0cb1-387a-47d4-8c34-bc6fd3be0e27",
+    "COMPLETE": "7223d809-553e-4714-a038-62dc98f3fbf3",
+    "CANT_DO": "06308884-41c2-4ee0-9da7-5676647d3d75",
+}
+
+
+def _status_filter(status_key: str) -> dict:
+    status_id = _STATUS_KEY_TO_ID.get(status_key.upper())
+    if status_id is None:
+        raise ToolError(
+            f"Unknown status_key '{status_key}'. Valid values: {', '.join(_STATUS_KEY_TO_ID)}. "
+            "If your organisation uses custom statuses, call get_action on a known action "
+            "and read its status.status_id/status.key to find the right value."
+        )
+    return {"type": "STATUS", "status_id": status_id}
+
+
 @mcp.tool(description=(
-    "List actions for the authenticated SafetyCulture account. "
-    "Filter by assignee_id (user ID) to get actions for a specific person. "
-    "Filter by status_key (TO_DO, IN_PROGRESS, DONE). "
-    "Supports pagination via page_token returned in next_page_token. "
-    "Sort by PRIORITY, DATE_DUE, CREATED_AT, or MODIFIED_AT."
+    "List actions for the authenticated SafetyCulture account, newest first by default. "
+    "Filter by assignee_id (a user's ID, e.g. from search_users_by_email or get_user) to see "
+    "only actions assigned to that person. Filter by status_key — one of TO_DO, IN_PROGRESS, "
+    "COMPLETE, CANT_DO — to see actions in a specific state. "
+    "Returns at most page_size actions (default 20, max 100); if next_page_token is non-null "
+    "in the result, more actions exist — call again with page_token set to fetch the next page, "
+    "or use list_all_actions to fetch every page automatically. "
+    "Sort with sort_field (PRIORITY, DATE_DUE, CREATED_AT, MODIFIED_AT) and sort_direction (ASC/DESC)."
 ))
 async def list_actions(
     ctx: Context,
@@ -34,7 +63,7 @@ async def list_actions(
     if assignee_id:
         task_filters.append({"type": "COLLABORATOR", "collaborator_id": assignee_id})
     if status_key:
-        task_filters.append({"type": "STATUS", "status_key": status_key})
+        task_filters.append(_status_filter(status_key))  # Fixed: send status_id, not status_key
     if task_filters:
         body["task_filters"] = task_filters
 
@@ -54,8 +83,10 @@ async def list_actions(
 
 
 @mcp.tool(description=(
-    "Get full details for a single SafetyCulture action by ID. "
-    "Returns title, description, status, priority, assignees (collaborators), due date, site, and inspection link."
+    "Get full details for a single SafetyCulture action by its task_id (from list_actions/list_all_actions). "
+    "Returns title, description, status (key + UUID), priority, due date, site_id, inspection_id, and "
+    "collaborators. Note: each collaborator's nested user object only includes firstname/lastname — "
+    "use get_user with the collaborator_id to resolve their email."
 ))
 async def get_action(ctx: Context, action_id: str) -> Action:
     resp = await request(
@@ -70,9 +101,14 @@ async def get_action(ctx: Context, action_id: str) -> Action:
 
 @mcp.tool(description=(
     "Create a new action in the authenticated SafetyCulture account. "
-    "Optionally assign to a user by providing assignee_id (user ID). "
+    "title is required; description, due_at, assignee_id, priority_id, status_id, site_id, "
+    "and inspection_id are all optional. "
+    "Optionally assign to a user by providing assignee_id (a user ID from search_users_by_email "
+    "or get_user — not an email address). "
     "due_at must be ISO 8601 format e.g. 2026-12-31T09:00:00Z. "
-    "priority_id and status_id can be obtained from your organisation's action settings."
+    "priority_id and status_id are org-specific UUIDs — to find valid values, call list_actions "
+    "or get_action on an existing action and read its priority/status objects; new actions "
+    "default to your organisation's default status if status_id is omitted."
 ))
 async def create_action(
     ctx: Context,
@@ -110,10 +146,15 @@ async def create_action(
 
 
 @mcp.tool(description=(
-    "Fetch ALL actions for the account by auto-paginating through every page "
-    "(up to max_pages × 100 actions). Useful for bulk exports or full-account audits. "
-    "Supports the same assignee_id and status_key filters as list_actions. "
-    "Returns an ActionsPage with total_count equal to the number of actions fetched."
+    "Fetch ALL actions matching the given filters by auto-paginating through every page — "
+    "use this instead of list_actions whenever you need a complete count or full export rather "
+    "than just the first page. Internally requests 100 actions per page and follows "
+    "next_page_token until the API reports no more pages, up to a hard cap of max_pages "
+    "(default 50, server-enforced max 100 — i.e. up to 10,000 actions total). "
+    "Supports the same assignee_id and status_key filters as list_actions (status_key one of "
+    "TO_DO, IN_PROGRESS, COMPLETE, CANT_DO). "
+    "Returns an ActionsPage with total_count equal to the number of actions actually fetched "
+    "(not the org-wide total) and next_page_token always null."
 ))
 async def list_all_actions(
     ctx: Context,
@@ -145,7 +186,7 @@ async def list_all_actions(
         if assignee_id:
             task_filters.append({"type": "COLLABORATOR", "collaborator_id": assignee_id})
         if status_key:
-            task_filters.append({"type": "STATUS", "status_key": status_key})
+            task_filters.append(_status_filter(status_key))  # Fixed: send status_id, not status_key
         if task_filters:
             body["task_filters"] = task_filters
 
@@ -167,11 +208,16 @@ async def list_all_actions(
 
 
 @mcp.tool(description=(
-    "Update one or more fields on an existing SafetyCulture action. "
-    "Only the fields you provide will be updated — omitted fields are left unchanged. "
-    "status_id: obtain valid status UUIDs from your organisation's action statuses endpoint "
-    "(GET /tasks/v1/actions/statuses) — do not hardcode UUIDs as they may be org-specific. "
-    "assignee_ids: full replacement — send all desired assignee user IDs at once. "
+    "Update one or more fields on an existing SafetyCulture action (identified by action_id, "
+    "i.e. its task_id from list_actions/get_action). At least one optional field must be provided. "
+    "Only the fields you provide are updated — omitted fields are left unchanged; each provided "
+    "field is sent as its own API request, so a partial failure may leave some fields updated "
+    "and others not (updated_fields in the result shows what succeeded before any error). "
+    "status_id: this org's standard status UUIDs are TO_DO=17e793a1-26a3-4ecd-99ca-f38ecc6eaa2e, "
+    "IN_PROGRESS=20ce0cb1-387a-47d4-8c34-bc6fd3be0e27, COMPLETE=7223d809-553e-4714-a038-62dc98f3fbf3, "
+    "CANT_DO=06308884-41c2-4ee0-9da7-5676647d3d75 — confirm against get_action if your org uses "
+    "custom statuses, since these IDs are not guaranteed across organisations. "
+    "assignee_ids: full replacement — send all desired assignee user IDs at once, not just the ones changing. "
     "due_at: ISO 8601 e.g. 2026-12-31T09:00:00Z. Pass empty string to clear the due date."
 ))
 async def update_action(
