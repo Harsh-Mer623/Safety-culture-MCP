@@ -8,7 +8,7 @@ from fastmcp.exceptions import ToolError
 from safetyculture_mcp.models.schemas import (
     InspectionSummary, InspectionDetail,
     Template,
-    ActionTask, Action, CreatedAction,
+    ActionTask, ActionStatus, ActionPriority, Action, CreatedAction,
     User,
 )
 from safetyculture_mcp.tools.inspections import list_inspections, get_inspection
@@ -123,6 +123,22 @@ def test_action_wraps_task():
     assert a.task.task_id == "t1"
 
 
+def test_action_status_is_object():
+    status = ActionStatus(status_id="s1", key="TO_DO", label="To Do", display_order=1)
+    task = ActionTask(task_id="t1", status=status)
+    assert task.status.key == "TO_DO"
+
+
+def test_action_ignores_extra_fields():
+    a = Action(task=ActionTask(task_id="t1", unknown_field="ignored"))
+    assert a.task.task_id == "t1"
+
+
+def test_inspection_summary_ignores_extra():
+    s = InspectionSummary(audit_id="a1", unexpected="value")
+    assert s.audit_id == "a1"
+
+
 def test_created_action():
     ca = CreatedAction(action_id="ca1")
     assert ca.action_id == "ca1"
@@ -218,7 +234,7 @@ async def test_list_templates_429():
 
 @pytest.mark.asyncio
 async def test_list_actions_returns_actions():
-    resp = make_resp(200, {"actions": [{"task": {"task_id": "t1", "title": "Fix hazard", "status": "open"}}]})
+    resp = make_resp(200, {"actions": [{"task": {"task_id": "t1", "title": "Fix hazard", "status": {"key": "TO_DO", "label": "To Do"}}}]})
     ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
         result = await list_actions(ctx)
@@ -246,7 +262,7 @@ async def test_list_actions_500():
 
 @pytest.mark.asyncio
 async def test_get_action_returns_action():
-    resp = make_resp(200, {"action": {"task": {"task_id": "t1", "title": "Fix hazard", "status": "open"}}})
+    resp = make_resp(200, {"action": {"task": {"task_id": "t1", "title": "Fix hazard", "status": {"key": "TO_DO", "label": "To Do"}}}})
     ctx = make_ctx()
     with patch("safetyculture_mcp.tools.actions.httpx.AsyncClient", return_value=mock_client(resp)):
         result = await get_action(ctx, "t1")
